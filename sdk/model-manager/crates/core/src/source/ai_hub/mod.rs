@@ -22,6 +22,7 @@ use std::time::{Duration, SystemTime};
 use async_trait::async_trait;
 use url::Url;
 
+use crate::config::StoreConfig;
 use crate::error::{parse_manifest, Error, Result};
 use crate::manifest::{ModelFileInfo, ModelManifest, ModelType};
 use crate::transport::{HttpTransport, ReqwestTransport};
@@ -38,9 +39,12 @@ use super::{basename, BytesSource, FileSpec, ModelSource, Plan};
 
 const MANIFEST_FILENAME: &str = "manifest.json";
 const PLATFORM_FILENAME: &str = "platform.json";
+const LATEST_VERSION_FILENAME: &str = "latest.txt";
 const MAX_INDEX_BYTES: u64 = 8 * 1024 * 1024;
 
-/// TTL for the on-disk index cache (matches Go CLI's 24h).
+/// TTL for the on-disk index cache (matches Go CLI's 24h). Also used for
+/// the `latest.txt` pointer cache — AIHM releases roughly monthly, so a
+/// separate, shorter TTL for the pointer wasn't worth the extra constant.
 const CACHE_TTL: Duration = Duration::from_secs(24 * 60 * 60);
 
 #[derive(Debug, Clone)]
@@ -92,6 +96,78 @@ async fn fetch_platform_info(
     )
     .await?;
     parse_manifest("platform.json", &platform_bytes)
+}
+
+/// Resolve which AIHM release the AI Hub source should use.
+///
+/// `GENIEX_AIHUBVERSION` ([`StoreConfig::ai_hub_version_override`]) wins
+/// outright when set — no network call. Otherwise fetch
+/// `{endpoint}/releases/latest.txt`, the pointer AIHM's release pipeline
+/// writes last once every model's assets are uploaded
+/// (qcom-ai-hub/ai-hub-models-internal#4284), honouring the same 24h
+/// on-disk [`CACHE_TTL`] as manifest.json/platform.json. Any failure
+/// along the way (network, missing pointer, malformed
+/// content) falls back to [`StoreConfig::ai_hub_version_fallback`] so this
+/// lookup never blocks a pull.
+pub async fn resolve_ai_hub_version(endpoint: &str, cache_dir: &Path) -> String {
+    if let Some(pinned) = StoreConfig::ai_hub_version_override() {
+        return pinned;
+    }
+
+    let cache_path = cache_dir.join(LATEST_VERSION_FILENAME);
+    if let Some(bytes) = read_latest_version_cache(&cache_path, CACHE_TTL) {
+        if let Some(v) = parse_latest_version(&bytes) {
+            return v;
+        }
+    }
+
+    let transport: Arc<dyn HttpTransport> = match ReqwestTransport::new() {
+        Ok(t) => Arc::new(t),
+        Err(e) => {
+            crate::logging::warn(&format!("aihub latest.txt transport init: {e}"));
+            return StoreConfig::ai_hub_version_fallback();
+        }
+    };
+
+    let url = format!("{endpoint}/releases/{LATEST_VERSION_FILENAME}");
+    match fetch_direct(&url, &transport).await {
+        Ok(bytes) => match parse_latest_version(&bytes) {
+            Some(v) => {
+                write_cache(&cache_path, &bytes);
+                v
+            }
+            None => {
+                crate::logging::warn(&format!("aihub latest.txt at {url} is empty/malformed"));
+                StoreConfig::ai_hub_version_fallback()
+            }
+        },
+        Err(e) => {
+            crate::logging::warn(&format!("aihub latest.txt fetch from {url}: {e}"));
+            StoreConfig::ai_hub_version_fallback()
+        }
+    }
+}
+
+/// mtime-only cache check for `latest.txt`: unlike manifest/platform
+/// ([`read_cache`]), this file's content *is* the version, so there's no
+/// embedded version field to cross-check — freshness is purely TTL-based.
+fn read_latest_version_cache(path: &Path, ttl: Duration) -> Option<Vec<u8>> {
+    let meta = std::fs::metadata(path).ok()?;
+    let mtime = meta.modified().ok()?;
+    if SystemTime::now().duration_since(mtime).ok()? > ttl {
+        return None;
+    }
+    std::fs::read(path).ok()
+}
+
+/// Normalize `latest.txt`'s bare `0.61.0` body into the `v0.61.0` form the
+/// `releases/{version}/...` path segment expects. `None` for empty content.
+fn parse_latest_version(bytes: &[u8]) -> Option<String> {
+    let text = std::str::from_utf8(bytes)
+        .ok()?
+        .trim()
+        .trim_start_matches('v');
+    (!text.is_empty()).then(|| format!("v{text}"))
 }
 
 /// The `os.ostype` values this build runs on; `None` means "don't filter".
