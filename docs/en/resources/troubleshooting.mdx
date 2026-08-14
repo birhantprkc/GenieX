@@ -113,7 +113,13 @@ import Feedback from "/snippets/page-feedback.mdx";
     cat /proc/cpuinfo | grep Features          # same features, under the kernel's names
     ```
 
-    If those features are absent, the device can't run the current build. Report it in [GitHub Issues](https://github.com/qualcomm/GenieX/issues) or Slack with the output above.
+    If those features are absent, install the **baseline** build instead. It is compiled for plain `armv8.0-a` with `-moutline-atomics`, ships CPU inference only (no QAIRT/NPU, no OpenCL/GPU, no Hexagon), and is correspondingly slower — ggml falls back to its fp32 quant kernels without `dotprod`/`fp16`. `install.sh` picks it automatically when `atomics` is missing from `/proc/cpuinfo`; force it with `--baseline`:
+
+    ```bash bash
+    curl -fsSL https://raw.githubusercontent.com/qualcomm/GenieX/main/cli/release/linux/install.sh | sh -s -- --baseline
+    ```
+
+    If the baseline build still fails, report it in [GitHub Issues](https://github.com/qualcomm/GenieX/issues) or Slack with the output above.
   </Accordion>
 </AccordionGroup>
 

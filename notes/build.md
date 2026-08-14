@@ -80,6 +80,20 @@ cmake --build build-linux -j
 cmake --install build-linux --prefix pkg-geniex
 ```
 
+#### Baseline armv8.0-a variant
+
+NPU-less Dragonwing IoT boards (unoq) are baseline ARMv8.0 and trap on the LSE
+atomics the `snapdragon` presets inline (see
+[#1217](https://github.com/qualcomm/GenieX/issues/1217)). Swap the preset for
+`arm64-linux-baseline-{debug,release}` — same container, `-march=armv8-a+crc
+-moutline-atomics`, and CPU-only (no QAIRT, Hexagon, or OpenCL):
+
+```bash
+cmake --preset arm64-linux-baseline-debug -B build-linux-baseline .
+cmake --build build-linux-baseline -j
+cmake --install build-linux-baseline --prefix pkg-geniex
+```
+
 ### Android (cross-compile from Linux)
 
 Build the SDK inside the derived Snapdragon Android toolchain container — it extends [ghcr.io/snapdragon-toolchain/arm64-android](https://github.com/ggml-org/llama.cpp/blob/master/docs/backend/snapdragon/README.md#android) with `build-essential`, `ccache`, `rustup`, and the `aarch64-linux-android` Rust target baked in (see [`.github/docker/toolchain-android.Dockerfile`](../.github/docker/toolchain-android.Dockerfile)). Run from the repo root.
