@@ -228,6 +228,11 @@ jobs:
 
       - uses: actions/download-artifact@v8
         with:
+          name: sdk-linux-arm64-baseline
+          path: sdk-linux-arm64-baseline
+
+      - uses: actions/download-artifact@v8
+        with:
           name: sdk-android-arm64
           path: sdk-android-arm64
 
@@ -240,6 +245,11 @@ jobs:
         with:
           name: cli-linux-arm64
           path: cli-linux-arm64/
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: cli-linux-arm64-baseline
+          path: cli-linux-arm64-baseline/
 
       - uses: actions/download-artifact@v8
         with:
@@ -263,12 +273,16 @@ jobs:
           mv geniex_llama_cpp-*.tar.gz "geniex-pysdist-llama_cpp-${RELEASE_TAG}.tar.gz"
           mv geniex_qairt-*.tar.gz "geniex-pysdist-qairt-${RELEASE_TAG}.tar.gz"
 
-          staged="geniex-cli-linux-arm64-${RELEASE_TAG}"
-          mkdir -p "${staged}"
-          unzip -q cli-linux-arm64/artifact.zip -d "${staged}"
-          chmod +x "${staged}/geniex"
-          tar -czf "${staged}.tar.gz" "${staged}"
-          rm -rf "${staged}"
+          # -baseline is the armv8.0-a CPU-only build for NPU-less boards
+          # (unoq); install.sh picks it when HWCAP lacks LSE atomics. See #1217.
+          for plat in linux-arm64 linux-arm64-baseline; do
+            staged="geniex-cli-${plat}-${RELEASE_TAG}"
+            mkdir -p "${staged}"
+            unzip -q "cli-${plat}/artifact.zip" -d "${staged}"
+            chmod +x "${staged}/geniex"
+            tar -czf "${staged}.tar.gz" "${staged}"
+            rm -rf "${staged}"
+          done
 
           # Stage the install script as a versioned release asset so users can
           # pin to a specific tag's script — the mutable install.sh pointer is
@@ -288,9 +302,10 @@ jobs:
           fi
           zip -r "geniex-sdk-windows-arm64-${RELEASE_TAG}${sdk_suffix}.zip" sdk-windows-arm64
           zip -r "geniex-sdk-linux-arm64-${RELEASE_TAG}.zip" sdk-linux-arm64
+          zip -r "geniex-sdk-linux-arm64-baseline-${RELEASE_TAG}.zip" sdk-linux-arm64-baseline
 
           # Package standalone geniex-bench archives (bin + runtime libs).
-          for plat in linux-arm64 windows-arm64 android-arm64; do
+          for plat in linux-arm64 linux-arm64-baseline windows-arm64 android-arm64; do
             src="sdk-${plat}"
             bench_dir="geniex-bench-${plat}-${RELEASE_TAG}"
             mkdir -p "${bench_dir}/bin" "${bench_dir}/lib"
@@ -313,7 +328,7 @@ jobs:
             rm -rf "${bench_dir}"
           done
 
-          rm -rf sdk-windows-arm64 sdk-linux-arm64 sdk-android-arm64 cli-linux-arm64 to-sign
+          rm -rf sdk-windows-arm64 sdk-linux-arm64 sdk-linux-arm64-baseline sdk-android-arm64 cli-linux-arm64 cli-linux-arm64-baseline to-sign
 
           shopt -s nullglob
           files=(*.zip *.exe *.tar.gz *.cer *.aar install-*.sh)
