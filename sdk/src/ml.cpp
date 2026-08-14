@@ -23,15 +23,48 @@
 #include <windows.h>
 #endif
 
-// Baseline armv8.0 boards (e.g. unoq) lack the armv8.2 features this build bakes
-// in, so bail cleanly instead of SIGILL. Keep in sync with -march. See #1217.
+// Baseline armv8.0 boards (e.g. unoq) lack the armv8.2 features the Snapdragon
+// build bakes in, so bail cleanly instead of SIGILL. See #1217.
+//
+// The mask is derived from the __ARM_FEATURE_* macros -march defines rather than
+// hardcoded, so it tracks the toolchain file automatically: the Snapdragon build
+// (armv8.2-a+fp16+dotprod) demands the full set, while the baseline armv8.0-a
+// variant defines none of them and the mask collapses to crc32 alone.
 #if defined(__linux__) && defined(__aarch64__)
 #include <asm/hwcap.h>
 #include <sys/auxv.h>
 
 static bool cpu_features_supported() {
-    unsigned long need = HWCAP_ATOMICS | HWCAP_ASIMDRDM | HWCAP_ASIMDDP | HWCAP_FPHP | HWCAP_ASIMDHP | HWCAP_CRC32;
-    return (getauxval(AT_HWCAP) & need) == need;
+    unsigned long need = 0;
+#ifdef __ARM_FEATURE_ATOMICS  // LSE: LDADDAL and friends, armv8.1
+    need |= HWCAP_ATOMICS;
+#endif
+#ifdef __ARM_FEATURE_QRDMX  // SQRDMLAH, armv8.1
+    need |= HWCAP_ASIMDRDM;
+#endif
+#ifdef __ARM_FEATURE_CRC32
+    need |= HWCAP_CRC32;
+#endif
+#ifdef __ARM_FEATURE_DOTPROD
+    need |= HWCAP_ASIMDDP;
+#endif
+#ifdef __ARM_FEATURE_FP16_SCALAR_ARITHMETIC
+    need |= HWCAP_FPHP;
+#endif
+#ifdef __ARM_FEATURE_FP16_VECTOR_ARITHMETIC
+    need |= HWCAP_ASIMDHP;
+#endif
+#ifdef __ARM_FEATURE_SVE
+    need |= HWCAP_SVE;
+#endif
+    if ((getauxval(AT_HWCAP) & need) != need) {
+        return false;
+    }
+    unsigned long need2 = 0;
+#if defined(__ARM_FEATURE_MATMUL_INT8) && defined(HWCAP2_I8MM)
+    need2 |= HWCAP2_I8MM;
+#endif
+    return (getauxval(AT_HWCAP2) & need2) == need2;
 }
 #else
 static bool cpu_features_supported() { return true; }
