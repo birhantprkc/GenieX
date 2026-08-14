@@ -22,6 +22,7 @@ ISSUE_URL="https://github.com/qualcomm/GenieX/issues"
 VERSION=""
 PREFIX=""
 QUIET=0
+BASELINE=0
 
 usage() {
     cat <<EOF
@@ -33,6 +34,8 @@ Options:
   --version vX.Y.Z   Install a specific release (default: latest stable)
   --prefix DIR       Install to DIR (default: /usr/local/lib/geniex when root,
                      \${XDG_DATA_HOME:-\$HOME/.local/share}/geniex otherwise)
+  --baseline         Force the CPU-only armv8.0-a build (auto-detected from
+                     /proc/cpuinfo; only needed if detection fails)
   -q, --quiet        Suppress non-error output
   -h, --help         Show this help
 
@@ -112,6 +115,10 @@ while [ $# -gt 0 ]; do
             PREFIX="${1#*=}"
             shift
             ;;
+        --baseline)
+            BASELINE=1
+            shift
+            ;;
         -q|--quiet)
             QUIET=1
             shift
@@ -144,6 +151,39 @@ case "$arch" in
         err "unsupported architecture: $arch (this installer only supports ARM64)"
         err "report at $ISSUE_URL if you need another platform"
         exit 1
+        ;;
+esac
+
+# The default build targets armv8.2-a; baseline armv8.0 boards (NPU-less
+# Dragonwing IoT SoCs such as unoq) trap on its LSE atomics, so CI also ships a
+# CPU-only '-baseline' artifact for them. LSE (HWCAP_ATOMICS) is the cheapest
+# proxy for "armv8.1 or newer" and shows up as 'atomics' in /proc/cpuinfo.
+# See https://github.com/qualcomm/GenieX/issues/1217.
+if [ "$BASELINE" -eq 1 ]; then
+    cpu_features=""
+else
+    cpu_features=$(awk -F': ' '/^Features/ { print $2; exit }' /proc/cpuinfo 2>/dev/null || true)
+fi
+case " ${cpu_features} " in
+    *" atomics "*)
+        ;;
+    "  " | " ")
+        if [ "$BASELINE" -eq 1 ]; then
+            ASSET_STEM="${ASSET_STEM}-baseline"
+            say "Installing the CPU-only armv8.0-a build (--baseline)."
+        else
+            # No Features line (unusual container / kernel). Assume the default
+            # build rather than silently downgrading everyone to the slow one.
+            say "Warning: could not read CPU features from /proc/cpuinfo."
+            say "  Assuming an armv8.2 CPU. If geniex dies with an illegal"
+            say "  instruction, re-run with --baseline."
+        fi
+        ;;
+    *)
+        BASELINE=1
+        ASSET_STEM="${ASSET_STEM}-baseline"
+        say "Baseline ARMv8.0 CPU detected (no LSE atomics) — installing the"
+        say "CPU-only build. NPU and GPU inference are not available on this board."
         ;;
 esac
 
@@ -267,10 +307,13 @@ fi
 rm -rf "${PREFIX}.old"
 
 # Symlink bare-name fastrpc libs into the prefix so the bundled QNN HTP stub
-# can find them via the LD_LIBRARY_PATH the launcher sets
-say "Linking host NPU libraries"
-resolve_host_lib libcdsprpc.so
-resolve_host_lib libadsprpc.so
+# can find them via the LD_LIBRARY_PATH the launcher sets. The baseline build
+# ships no QAIRT/HTP plugin, so there is nothing to resolve there.
+if [ "$BASELINE" -eq 0 ]; then
+    say "Linking host NPU libraries"
+    resolve_host_lib libcdsprpc.so
+    resolve_host_lib libadsprpc.so
+fi
 
 # Launcher wrapper instead of a bare symlink: the binary is built without
 # an $ORIGIN rpath, so it can't find sibling libgeniex.so / plugins unless
